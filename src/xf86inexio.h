@@ -52,6 +52,10 @@
 #define INEXIO_MAX_Y 0x3FFF
 #define INEXIO_BUTTON_DOWN 0x81
 #define INEXIO_BUTTON_UP   0x80
+#define INEXIO_BODY_LEN 0x05
+
+
+typedef enum { inexio_normal, inexio_type, inexio_body } INEXIOState;
 
 /**
  * This internal struct is used by our driver.
@@ -61,21 +65,26 @@
 typedef struct _InexioDevice {
     char        *device;		/* device filename */
 	
-    int			inexOldButton;	/* previous button state */
-	int 		inexButtonNo;	/* the button number we report */
-	int			inexReportMode;	/* the reporting mode (raw or scaled) */
+	Bool		button_down;	/* is the "button" currently down */
+	int 		button_number;	/* which button to report */
+	int 		last_x;
+	int			last_y;
 
-	int 		inexScreenNo;	/* the screen we are attaached to */
-	int 		inexScreenW;	/* the screen width */
-	int 		inexScreenH;	/* the screen height */
+	int 		screen_num;		/* Screen associated with the device        */
+	int 		screen_width;	/* Width of the associated X screen     */
+	int 		screen_height;	/* Height of the screen             */
 
-	int 		inexMaxX;		/* max X value */
-	int 		inexMaxY;		/* max Y value */
-    int			inexXSize;		/* active area X size */
-    int			inexXOffset;	/* active area X offset */
-    int			inexYSize;		/* active area Y size */
-    int			inexYOffset;	/* active area Y offset */
-	int			inexRotate;		/* rotate screen axis */
+	int 		min_x;			/* Minimum x reported by calibration        */
+	int 		max_x;			/* Maximum x                    */
+	int 		min_y;			/* Minimum y reported by calibration        */
+	int 		max_y;			/* Maximum y                    */
+
+	XISBuffer *buffer;
+	unsigned char packet[256];	/* packet being/just read */
+	int packeti;				/* index into packet */
+	INEXIOState lex_mode;
+	
+	int			swap_axes;		/* swap x and y axis */
 } InexioDeviceRec, *InexioDevicePtr;
 
 #endif /* __RANDOM_H__ */

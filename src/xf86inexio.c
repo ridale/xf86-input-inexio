@@ -49,6 +49,7 @@
 #include <xf86.h>
 #include <xf86_OSlib.h>
 #include <xf86Xinput.h>
+#include <xisb.h>
 
 #include <xf86inexio.h>
 
@@ -70,10 +71,25 @@ static void         InexioUnInit(InputDriverPtr   drv,
 static void         InexioReadInput(InputInfoPtr  pInfo);
 static int          InexioControl(DeviceIntPtr    device,
                                   int             what);
+static int			InexioSwitchMode(ClientPtr    client,
+									DeviceIntPtr  dev,
+									int           mode);
+static Bool 		InexioConvertProc(LocalDevicePtr	local,
+											int       	first,
+											int 		num,
+											int 		v0,
+											int 		v1,
+											int			v2,
+											int 		v3,
+											int 		v4,
+											int 		v5,
+											int 		*x,
+											int 		*y);
 
 /* internal */
 static int _inexio_init_buttons(DeviceIntPtr device);
 static int _inexio_init_axes(DeviceIntPtr device);
+static int _inexio_read_packet(InexioDevicePtr priv);
 
 /**
  * Driver Rec, fields are used when device is initialised/removed.
@@ -167,17 +183,19 @@ static InputInfoPtr InexioPreInit(InputDriverPtr  drv,
         return NULL;
     }
 
-    pInfo->private      = pInexio;
-	// TODO add the private data
+    pInfo->type_name    	= XI_TOUCHSCREEN; /* see XI.h */
+    pInfo->device_control	= InexioControl; /* enable/disable dev */
+    pInfo->read_input   	= InexioReadInput; /* new data avl */
+	pInfo->switch_mode		= InexioSwitchMode;
+	pInfo->conversion_proc 	= InexioConvertProc;
+	pInfo->dev 				= NULL;
+    pInfo->private      	= pInexio;
+	pInfo->private_flags 	= 0;
+	pInfo->flags        	= XI86_POINTER_CAPABLE | XI86_SEND_DRAG_EVENTS;
+    pInfo->conf_idev    	= dev;
 
-    pInfo->name         = xstrdup(dev->identifier);
-    pInfo->flags        = 0;
-    pInfo->type_name    = XI_TOUCHSCREEN; /* see XI.h */
-    pInfo->conf_idev    = dev;
-    pInfo->read_input   = InexioReadInput; /* new data avl */
-    pInfo->switch_mode  = NULL;            /* toggle absolute/relative mode */
-    pInfo->device_control = InexioControl; /* enable/disable dev */
-
+    pInfo->name         	= xstrdup(dev->identifier);
+    pInfo->history_size 	= 0;
 
     /* process driver specific options */
     pInexio->device = xf86CheckStrOption(dev->commonOptions, 
@@ -185,41 +203,33 @@ static InputInfoPtr InexioPreInit(InputDriverPtr  drv,
                                          "/dev/ttyS0");
     xf86Msg(X_INFO, "%s: Using device %s.\n", pInfo->name, pInexio->device);
 
-    pInexio->inexXSize = xf86CheckIntOption(dev->commonOptions, 
+    pInexio->max_x = xf86CheckIntOption(dev->commonOptions, 
                                          "MaxX",
                                          INEXIO_MAX_X); 		// want the calibration x max
-    pInexio->inexXOffset = xf86CheckIntOption(dev->commonOptions, 
+    pInexio->min_x = xf86CheckIntOption(dev->commonOptions, 
                                          "MinX",
                                          INEXIO_MIN_X);		// want the calibration x min
-    pInexio->inexYSize = xf86CheckIntOption(dev->commonOptions, 
+    pInexio->max_y = xf86CheckIntOption(dev->commonOptions, 
                                          "MaxY",
                                          INEXIO_MAX_Y); 		// want the calibration y max
-    pInexio->inexYOffset = xf86CheckIntOption(dev->commonOptions, 
+    pInexio->min_y = xf86CheckIntOption(dev->commonOptions, 
                                          "MinY",
                                          INEXIO_MIN_Y);		// want the calibration y min
 
-    pInexio->inexScreenNo = xf86CheckIntOption(dev->commonOptions, 
+    pInexio->screen_num = xf86CheckIntOption(dev->commonOptions, 
                                          "ScreenNumber",
                                          0);		// want the screen we are attached to
 
-    pInexio->inexButtonNo = xf86CheckIntOption(dev->commonOptions, 
+    pInexio->button_number = xf86CheckIntOption(dev->commonOptions, 
                                          "ButtonNumber",
                                          0);		// want the screen we are attached to
 
-	char* s = xf86CheckStrOption(dev->commonOptions, 
-                                         "ReportingMode",
-                                         NULL);
-	if ((s) && (xf86NameCmp(s,"raw") == 0))
-		pInexio->inexReportMode = TS_Raw;
-	else
-		pInexio->inexReportMode = TS_Scaled;
-
-	//	pInexio->inexRotate = ;		// want the rotate state CW or CCW
+	// TODO need to set up the rotate	
+    pInexio->swap_axes = 0;
 
     /* process generic options */
     xf86CollectInputOptions(pInfo, NULL, NULL);
     xf86ProcessCommonOptions(pInfo, pInfo->options);
-
 
     /* Open sockets, init device files, etc. */
     SYSCALL(pInfo->fd = open(pInexio->device, O_RDWR | O_NONBLOCK));
@@ -233,13 +243,23 @@ static InputInfoPtr InexioPreInit(InputDriverPtr  drv,
         return NULL;
     }
     /* do more initialization */
-	pInexio->inexMaxX = INEXIO_MAX_X;
-	pInexio->inexMaxY = INEXIO_MAX_Y;
-    pInexio->inexOldButton = INEXIO_BUTTON_UP;
-	
+
+	pInexio->buffer = XisbNew (pInfo->fd, 200);
+    pInexio->button_down = FALSE;
+    pInexio->last_x = 0;
+    pInexio->last_y = 0;
+
+    pInexio->packeti = 0;
+	pInexio->lex_mode = inexio_normal;
+
     /* close file again */
     close (pInfo->fd);
     pInfo->fd = -1;
+	if (pInexio->buffer)
+	{
+		XisbFree(pInexio->buffer);
+		pInexio->buffer = NULL;
+	}
 
     /* set the required flags */
     pInfo->flags |= XI86_OPEN_ON_INIT;
@@ -276,6 +296,7 @@ static void InexioReadInput(InputInfoPtr pInfo)
 	// TODO need to read the entire record and deal
 	// with touch and position
 	/*
+	 * format of 5 bytes per packet
 	 * format touch down  0x81 XH XL YH YL
 	 * format touch up    0x80 XH XL YH YL
 	 * where where XL,XH,YL,YH 7bit
@@ -286,58 +307,46 @@ static void InexioReadInput(InputInfoPtr pInfo)
 
     InexioDevicePtr       pInexio = pInfo->private;
 	
-    unsigned char data[4], button_data;
-	int x = 0, y = 0;
+    unsigned char data[4], button_data = 0, is_down = FALSE;
+	int x = 0, y = 0, len = -1;
     int is_absolute = TRUE, num_ax = 2;
 
-    while(xf86WaitForInput(pInfo->fd, 0) > 0)
+	XisbBlockDuration(pInexio->buffer, -1);
+    while(_inexio_read_packet(pInexio) == Success)
     {
-		// 1st get the button press
-        read(pInfo->fd, &button_data, 1);
-		if ((button_data != 0x80) && (button_data != 0x81))
-			continue;  // not a button event, go again
-		
-		// now read the data
-        read(pInfo->fd, &data, 4);
+		is_down = (pInexio->packet[0] & 1);
+        //xf86Msg(X_INFO, "%s: button down[%x].\n", pInfo->name, button_data&1);
+
 		// now we need to normalize the data
-		x = data[0]<<7 + data[1];
-		y = data[2]<<7 + data[3];
-		// do offsets and scales
-		// TODO
-		if (pInexio->inexReportMode == TS_Scaled)
-		{
-			x = xf86ScaleAxis(x, 0, 
-								pInexio->inexScreenW,
-								pInexio->inexXOffset,
-								pInexio->inexXSize);
-			y = xf86ScaleAxis(y, 0, 
-								pInexio->inexScreenH,
-								pInexio->inexYOffset,
-								pInexio->inexYSize);
+		x = pInexio->packet[2] + (pInexio->packet[1]<<7);
+		y = pInexio->packet[4] + (pInexio->packet[3]<<7);
+		if (is_down)
+		{ // if the button is down report position
+			pInexio->last_x = x;
+			pInexio->last_y = y;
 		}
-
-		if (pInexio->inexRotate != 0)	// swap X & Y
-		{
-			int tmp = x; x = y; y = tmp;
+		else
+		{ // if the button is up keep last position
+			x = pInexio->last_x;
+			y = pInexio->last_y;
 		}
-
-		xf86XInputSetScreen(pInfo, pInexio->inexScreenNo, x, y);
-		// do swaps and inverts
-		// TODO
-		assert(0);
 		// now we can send the event on
         xf86PostMotionEvent(pInfo->dev,
                             is_absolute, 	/* is_absolute		*/
                             0, 				/* first_valuator	*/
                             num_ax, 		/* number of axis	*/
                             x,y); 			/* the data			*/
+
+		//xf86Msg(X_INFO, "%s: posted the motion event\n", pInfo->name);
+
 		// button changed code
-		if (pInexio->inexOldButton != button_data)
+		if (pInexio->button_down != is_down)
 		{
-			int is_down = (button_data == INEXIO_BUTTON_DOWN)? 1 : 0;
-			pInexio->inexOldButton = button_data; // set old to new state
-			xf86PostButtonEvent(pInfo->dev, is_absolute, pInexio->inexButtonNo,
+			
+			pInexio->button_down = is_down; // set old to new state
+			xf86PostButtonEvent(pInfo->dev, is_absolute, pInexio->button_number,
 				       is_down, 0, num_ax, x, y );
+			//xf86Msg(X_INFO, "%s: posted the button event\n", pInfo->name);
 		}
     }
 }
@@ -370,6 +379,13 @@ static int InexioControl(DeviceIntPtr    device,
                 xf86Msg(X_ERROR, "%s: cannot open device.\n", pInfo->name);
                 return BadRequest;
             }
+			pInexio->buffer = XisbNew(pInfo->fd, 64);
+			if (!pInexio->buffer) 
+			{
+				close(pInfo->fd);
+				pInfo->fd = -1;
+				return (!Success);
+			}
 
             xf86FlushInput(pInfo->fd);
             xf86AddEnabledDevice(pInfo);
@@ -393,6 +409,44 @@ static int InexioControl(DeviceIntPtr    device,
     return Success;
 }
 
+/**
+ * Called when the device is mode to be switched Absolute/Relative.
+ * @return Success or X error code.
+ */
+static int InexioSwitchMode(ClientPtr    client,
+									DeviceIntPtr  dev,
+									int           mode)
+{
+	xf86Msg(X_INFO, "inexio: switch the screen mode [%i]\n",mode );
+	return Success;
+}
+
+/**
+ * Called to convert the device coordinates.
+ * @return Success or X error code.
+ */
+static Bool InexioConvertProc(LocalDevicePtr	local,
+											int       	first,
+											int 		num,
+											int 		v0,
+											int 		v1,
+											int			v2,
+											int 		v3,
+											int 		v4,
+											int 		v5,
+											int 		*x,
+											int 		*y)
+{
+    InexioDevicePtr pInexio = local->private;
+
+	*x = xf86ScaleAxis(v0, 0, pInexio->screen_width, pInexio->min_x,
+							pInexio->max_x);
+	*y = xf86ScaleAxis(v1, 0, pInexio->screen_height, pInexio->min_y,
+							pInexio->max_y);
+	xf86Msg(X_INFO, "inexio: transform coordinates v0[%i] v1[%i] ==> x[%i] y[%i]\n",
+				v0,v1,*x, *y);
+	return TRUE;
+}
 
 /***************************************************************************
  *                            internal procs                               *
@@ -402,8 +456,7 @@ static int InexioControl(DeviceIntPtr    device,
  * Init the button map for the random device.
  * @return Success or X error code on failure.
 */
-static int
-_inexio_init_buttons(DeviceIntPtr device)
+static int _inexio_init_buttons(DeviceIntPtr device)
 {
     InputInfoPtr        pInfo = device->public.devicePrivate;
     CARD8               *map;
@@ -431,14 +484,15 @@ _inexio_init_buttons(DeviceIntPtr device)
  * Only absolute mode is supported.
  * @return Success or X error code on failure.
 */
-static int
-_inexio_init_axes(DeviceIntPtr device)
+static int _inexio_init_axes(DeviceIntPtr device)
 {
     InputInfoPtr        pInfo = device->public.devicePrivate;
-    InexioDevicePtr pInexio = pInfo->private;
+    InexioDevicePtr 	pInexio = pInfo->private;
     int                 i;
     const int           num_axes = 2;
 
+	pInexio->screen_width = screenInfo.screens[pInexio->screen_num]->width;
+	pInexio->screen_height = screenInfo.screens[pInexio->screen_num]->height;
 
     if (!InitValuatorClassDeviceStruct(device,
                                        num_axes,
@@ -448,11 +502,92 @@ _inexio_init_axes(DeviceIntPtr device)
         return BadAlloc;
 
 
-	InitValuatorAxisStruct (device, 0, pInexio->inexXOffset, pInexio->inexXSize,
-								INEXIO_MAX_X);
-	InitValuatorAxisStruct (device, 1, pInexio->inexYOffset, pInexio->inexYSize,
-								INEXIO_MAX_Y);
+	xf86InitValuatorAxisStruct(device, 0, pInexio->min_x, pInexio->max_x,
+								INEXIO_MAX_X, 0, INEXIO_MAX_X);
+	xf86InitValuatorAxisStruct(device, 1, pInexio->min_y, pInexio->max_y,
+								INEXIO_MAX_Y, 0, INEXIO_MAX_Y);
+
+	// Allocate the motion events buffer.
+	xf86MotionHistoryAllocate(pInfo);
 
     return Success;
+}
+
+
+static void _inexio_new_packet(InexioDevicePtr priv)
+{
+	priv->lex_mode = inexio_normal;
+	priv->packeti = 0;
+}
+
+/**
+ * Init the valuators for the random device.
+ * Only absolute mode is supported.
+ * @return Success or X error code on failure.
+*/
+static int _inexio_read_packet(InexioDevicePtr priv)
+{
+	/*
+	 * format of 5 bytes per packet
+	 * format touch down  0x81 XH XL YH YL
+	 * format touch up    0x80 XH XL YH YL
+	 * where where XL,XH,YL,YH 7bit
+	 * X Coord = XL + XH<<7;
+	 * Y Coord = YL + YH<<7;
+	 * X max = Y max = 0x3FFF (16383)
+	 */
+
+	 int count = 0;
+	 int c;
+
+	 while ((c = XisbRead (priv->buffer)) >= 0)
+	 {
+		 /* 
+		  * fail after 500 bytes so the server doesn't hang forever if a
+		  * device sends bad data.
+		  */
+		 if (count++ > 100)
+		 {
+			 _inexio_new_packet(priv);
+			 return (!Success);
+		 }
+
+		 switch (priv->lex_mode)
+		 {
+		 case inexio_normal:
+			 if (c & INEXIO_BUTTON_UP)
+			 {
+				 priv->packet[priv->packeti++] = (unsigned char) c;
+				 priv->lex_mode = inexio_body;
+			 }
+			 break;
+
+		 case inexio_body:
+			 if (c & INEXIO_BUTTON_UP) // bad packet
+			 {
+				 xf86Msg(X_INFO, "inexio: bad packet, too short, discarded\n");
+				 _inexio_new_packet(priv);
+				 priv->packet[priv->packeti++] = (unsigned char) c;
+				 priv->lex_mode = inexio_body;
+			 }
+			 else
+			 {
+				 priv->packet[priv->packeti++] = (unsigned char) c;
+				 if (priv->packeti == INEXIO_BODY_LEN)
+				 {
+					 xf86Msg(X_INFO, "inexio: got good packet [%x][%x][%x][%x][%x]\n",
+						 	priv->packet[0],
+							priv->packet[1],
+							priv->packet[2],
+							priv->packet[3],
+							priv->packet[4]);
+					 _inexio_new_packet(priv);
+					 return (Success);
+				 }
+			 }
+			 break;
+		 }
+	 }
+	 return (!Success);
 }
 
