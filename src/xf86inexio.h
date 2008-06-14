@@ -53,14 +53,12 @@
 #define INEXIO_BUTTON_DOWN 0x81
 #define INEXIO_BUTTON_UP   0x80
 #define INEXIO_BODY_LEN 0x05
-
+#define INEXIO_BUFFER_LEN 0x100
 
 typedef enum { inexio_normal, inexio_type, inexio_body } INEXIOState;
 
 /**
  * This internal struct is used by our driver.
- * For more sophisticated drivers, it would probably include a great deal
- * more...
  */
 typedef struct _InexioDevice {
     char        *device;		/* device filename */
@@ -79,11 +77,10 @@ typedef struct _InexioDevice {
 	int 		min_y;			/* Minimum y reported by calibration        */
 	int 		max_y;			/* Maximum y                    */
 
-	XISBuffer *buffer;
-	unsigned char packet[256];	/* packet being/just read */
-	int packeti;				/* index into packet */
-	INEXIOState lex_mode;
-	
+	unsigned char buffer[INEXIO_BUFFER_LEN];	/* buffer being read */
+	int bufferi;				/* index into buffer */
+	unsigned char body[16];	/* packet just read */
+
 	int			swap_axes;		/* swap x and y axis */
 } InexioDeviceRec, *InexioDevicePtr;
 
