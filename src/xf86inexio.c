@@ -336,13 +336,68 @@ static void InexioReadInput(InputInfoPtr pInfo)
 						   is_down, 0, num_ax, x, y );
 				//xf86Msg(X_INFO, "%s: posted the button event\n", pInfo->name);
 			}
-			// need to ack the packet
+/*			
+			// The following is a USB ack string that is sent to the 
+			// device by the windows driver, doesn't seem to be required
+			// ack the packet
 			pInexio->body[0] = 0xaa; pInexio->body[1] = 0x02;
 			SYSCALL(write(pInfo->fd, pInexio->body, 2));
+*/
 		}
 	}
 }
 
+static Bool DeviceOn(DeviceIntPtr dev)
+{
+	InputInfoPtr  pInfo = dev->public.devicePrivate;
+	InexioDevicePtr pInexio = pInfo->private;
+
+	if (dev->public.on)
+	   return Success; // already on
+
+	SYSCALL(pInfo->fd = open(pInexio->device, O_RDONLY | O_NONBLOCK));
+	if (pInfo->fd < 0)
+	{
+		xf86Msg(X_ERROR, "%s: cannot open device.\n", pInfo->name);
+		return BadRequest;
+	}
+
+	struct termios tty;
+	/* Set speed to 19200bps ( copied from gpm code ) */
+	tcgetattr(pInfo->fd, &tty);
+	tty.c_iflag = IGNBRK | IGNPAR;
+	tty.c_oflag = 0;
+	tty.c_lflag = 0;
+	tty.c_line = 0;
+	tty.c_cc[VTIME] = 0;
+	tty.c_cc[VMIN] = 1;
+	tty.c_cflag = B19200|CS8|CREAD|CLOCAL|HUPCL;
+	int err = tcsetattr(pInfo->fd, TCSAFLUSH, &tty);
+	if (err < 0)
+	{
+		xf86Msg(X_ERROR, "%s: cannot set tty attributes for device.\n",
+					pInfo->name);
+		return !Success;
+	}
+
+/*	
+	// The following is a USB init string that is sent to the device by the
+	// windows driver, doesn't seem to be required
+	pInexio->body[0] = 0x82; pInexio->body[1] = 0x04;
+	pInexio->body[2] = 0x0a; pInexio->body[3] = 0x0f;
+	SYSCALL(write(pInfo->fd, pInexio->body, 4));
+
+	pInexio->body[0] = 0x83; pInexio->body[1] = 0x06;
+	pInexio->body[2] = 0x35; pInexio->body[3] = 0x2e;
+	pInexio->body[4] = 0x30; pInexio->body[5] = 0x32;
+	SYSCALL(write(pInfo->fd, pInexio->body, 6));
+*/
+	xf86FlushInput(pInfo->fd);
+	xf86AddEnabledDevice(pInfo);
+	dev->public.on = TRUE;
+	return Success;
+ 
+}
 /**
  * Called when the device is to be enabled/disabled, etc.
  * @return Success or X error code.
@@ -362,28 +417,7 @@ static int InexioControl(DeviceIntPtr    device,
         /* Switch device on. Establish socket, start event delivery.  */
         case DEVICE_ON:
             xf86Msg(X_INFO, "%s: On.\n", pInfo->name);
-            if (device->public.on)
-                break;
-
-            SYSCALL(pInfo->fd = open(pInexio->device, O_RDONLY | O_NONBLOCK));
-            if (pInfo->fd < 0)
-            {
-                xf86Msg(X_ERROR, "%s: cannot open device.\n", pInfo->name);
-                return BadRequest;
-            }
-
-/*			pInexio->body[0] = 0x82; pInexio->body[1] = 0x04;
-			pInexio->body[2] = 0x0a; pInexio->body[3] = 0x0f;
-			SYSCALL(write(pInfo->fd, pInexio->body, 4));
-
-			pInexio->body[0] = 0x83; pInexio->body[1] = 0x06;
-			pInexio->body[2] = 0x35; pInexio->body[3] = 0x2e;
-			pInexio->body[4] = 0x30; pInexio->body[5] = 0x32;
-			SYSCALL(write(pInfo->fd, pInexio->body, 6));
-*/
-            xf86FlushInput(pInfo->fd);
-            xf86AddEnabledDevice(pInfo);
-            device->public.on = TRUE;
+			return DeviceOn(device);
             break;
         /**
          * Shut down device.
