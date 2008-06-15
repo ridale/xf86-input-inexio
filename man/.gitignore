@@ -1,2 +1,4 @@
 Makefile
 Makefile.in
+inexio.4
+.inexio.man.marks

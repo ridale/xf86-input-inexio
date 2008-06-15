@@ -213,7 +213,7 @@ static InputInfoPtr InexioPreInit(InputDriverPtr  drv,
 
     pInexio->button_number = xf86CheckIntOption(dev->commonOptions, 
                                          "ButtonNumber",
-                                         0);		// want the screen we are attached to
+                                         1);		// want the screen we are attached to
 
 	// TODO need to set up the rotate	
     pInexio->swap_axes = 0;
