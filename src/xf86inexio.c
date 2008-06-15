@@ -347,7 +347,11 @@ static void InexioReadInput(InputInfoPtr pInfo)
 	}
 }
 
-static Bool DeviceOn(DeviceIntPtr dev)
+/**
+ * Called when the device is started
+ * @return Success or X error code.
+ */
+static int DeviceOn(DeviceIntPtr dev)
 {
 	InputInfoPtr  pInfo = dev->public.devicePrivate;
 	InexioDevicePtr pInexio = pInfo->private;
@@ -398,6 +402,7 @@ static Bool DeviceOn(DeviceIntPtr dev)
 	return Success;
  
 }
+
 /**
  * Called when the device is to be enabled/disabled, etc.
  * @return Success or X error code.
