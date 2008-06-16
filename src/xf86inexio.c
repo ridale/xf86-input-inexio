@@ -400,7 +400,6 @@ static int DeviceOn(DeviceIntPtr dev)
 	xf86AddEnabledDevice(pInfo);
 	dev->public.on = TRUE;
 	return Success;
- 
 }
 
 /**
