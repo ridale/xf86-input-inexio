@@ -40,10 +40,6 @@ tool. The calibration data can be entered in the Min and Max options for X
 and Y.
 .PP
 Config details...
-.SH NOTE
-In order for the driver to work you 
-.B MUST
-stop the gpm driver from using the device.
 .SH ADVANCED OPTIONS
 The following driver 
 .B Options
