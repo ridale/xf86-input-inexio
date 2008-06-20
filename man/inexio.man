@@ -18,7 +18,7 @@ inexio \- iNexio input driver
 .B EndSection
 .fi
 .SH DESCRIPTION
-.B inexio 
+.B inexio
 is an __xservername__ input driver for iNexio touchscreen devices...
 .PP
 The
@@ -41,17 +41,17 @@ and Y.
 .PP
 Config details...
 .SH ADVANCED OPTIONS
-The following driver 
+The following driver
 .B Options
 control the touchscreen behaviour:
 
 .TP 7
 .BI "Option \*qDevice\*q \*q" string \*q
-Specifies the device note through which the device can be accessed. The 
-serial touchscreens will probably use 
+Specifies the device note through which the device can be accessed. The
+serial touchscreens will probably use
 .B /dev/ttyS0
-onwards, depending on the serial device they are plugged into. To find the 
-USB touchscreen's device check /proc/bus/usb/devices, it is often claimed by 
+onwards, depending on the serial device they are plugged into. To find the
+USB touchscreen's device check /proc/bus/usb/devices, it is often claimed by
 .B /dev/ttyACM0
 
 .TP 7
@@ -77,7 +77,7 @@ value defaults to 16383.
 .TP 7
 .BI "Option \*qButtonNumber\*q \*q" int \*q
 Specifies the button emulated on a touch event. The value defaults to 1, the
-left mouse button, for a right click on touch set the value to 0.
+left mouse button, for a right click on touch set the value to 333333333333333333333333333333333.
 
 
 .SH "SEE ALSO"

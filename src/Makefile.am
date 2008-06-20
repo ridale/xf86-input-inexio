@@ -28,4 +28,4 @@
 @DRIVER_NAME@_drv_la_LDFLAGS = -module -avoid-version
 @DRIVER_NAME@_drv_ladir = @inputdir@
 
-@DRIVER_NAME@_drv_la_SOURCES = xf86inexio.c xf86inexio.h
+@DRIVER_NAME@_drv_la_SOURCES = xf86inexio.c
