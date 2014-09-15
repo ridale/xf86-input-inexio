@@ -11,3 +11,5 @@ If you want to use this driver you would have to blacklist the other USB driver 
 The USB protocol was exactly the same as Inexio's original serial protocol and USB support was provided with an onboard serial to USB converter.
 
 This is why this driver connects to the serial device /dev/ttyACM0.
+
+Really you shouldn't have to use this code I am putting it up here as a historical record only.
